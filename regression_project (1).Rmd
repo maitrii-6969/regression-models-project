@@ -1,0 +1,108 @@
+---
+title: "Motor Trend: Is Automatic or Manual Transmission Better for MPG?"
+author: "Maitreya Tarmale"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center")
+data(mtcars)
+mtcars$am <- factor(mtcars$am, labels = c("Automatic", "Manual"))
+```
+
+## Executive Summary
+
+Motor Trend asked two questions: (1) is an automatic or manual transmission better for MPG, and (2) how large is the MPG difference? Using the `mtcars` data (32 cars), a simple comparison says manual cars get about **7.2 MPG more** than automatics. That number is misleading, because manual cars in this data are also lighter. After adjusting for weight and quarter-mile time, manual transmission is associated with about **2.9 MPG more** (95% CI: 0.05 to 5.83 MPG, p = 0.047). So manual looks better for MPG, but the evidence is weak and the true advantage could be close to zero. Weight is by far the stronger predictor of fuel economy.
+
+## Exploratory Data Analysis
+
+```{r eda}
+table(mtcars$am)
+aggregate(cbind(mpg, wt, qsec, hp) ~ am, data = mtcars, FUN = mean)
+```
+
+Manual cars have a higher mean MPG (24.4 vs 17.1) but are also much lighter (2.4 vs 3.8 thousand lb). Weight is strongly correlated with MPG (r = -0.87), so transmission and weight are confounded (Figure 1 and Figure 2 in the Appendix).
+
+## Model Selection Strategy
+
+I fit nested models, always keeping `am` as the variable of interest, and compared them with ANOVA (F-tests) and adjusted R-squared.
+
+```{r models}
+fit1 <- lm(mpg ~ am, data = mtcars)                  # unadjusted
+fit2 <- lm(mpg ~ am + wt, data = mtcars)             # + weight
+fit3 <- lm(mpg ~ am + wt + qsec, data = mtcars)      # + quarter-mile time
+fit4 <- lm(mpg ~ am * wt + qsec, data = mtcars)      # + am:wt interaction
+fitAll <- lm(mpg ~ ., data = mtcars)                 # all variables
+anova(fit1, fit2, fit3)
+anova(fit3, fit4)
+sapply(list(fit1 = fit1, fit2 = fit2, fit3 = fit3, fit4 = fit4, all = fitAll),
+       function(f) round(summary(f)$adj.r.squared, 3))
+```
+
+- **fit1** (am only) explains only 36% of the variance.
+- Adding **wt** raises adjusted R-squared to 0.74, and adding **qsec** raises it to 0.83. Each addition is significant by the F-test.
+- Adding the **am:wt interaction** (fit4) is also significant (F-test p = 0.002) and raises adjusted R-squared to 0.88. It means the benefit of a manual transmission depends on the car's weight. I keep the simpler **fit3** for the headline answer because a single number is easier to interpret and report, but the interaction is a real feature of the data, so I discuss it as a limitation below.
+- The full model with every variable has a *lower* adjusted R-squared than fit3 and no significant terms, which is a sign of overfitting and collinearity (`wt`, `disp`, `hp` are strongly correlated).
+
+## Final Model and Interpretation
+
+```{r final}
+summary(fit3)$coefficients
+round(confint(fit3), 2)
+```
+
+Holding weight and quarter-mile time constant:
+
+- **am (Manual)**: manual cars get about **2.94 MPG more** than automatics (95% CI 0.05 to 5.83).
+- **wt**: each additional 1,000 lb lowers MPG by about **3.92** (95% CI -5.37 to -2.46).
+- **qsec**: each additional second of quarter-mile time is associated with about **1.23 MPG more** (95% CI 0.63 to 1.82).
+- **Intercept (9.6)** is the expected MPG for an automatic car with wt = 0 and qsec = 0, which is outside the data, so it has no practical meaning.
+
+The model explains about **85%** of the variation in MPG (R-squared = 0.85, adjusted 0.83).
+
+## Residual Diagnostics
+
+```{r resid, fig.height=5, fig.cap="Residual diagnostics for the final model"}
+par(mfrow = c(2, 2))
+plot(fit3)
+par(mfrow = c(1, 1))
+shapiro.test(resid(fit3))
+head(sort(cooks.distance(fit3), decreasing = TRUE), 3)
+```
+
+The residuals vs fitted plot shows no strong pattern, and the Q-Q plot is close to a straight line. The Shapiro-Wilk test does not reject normality (p = 0.08). No point is highly influential: the largest Cook's distance is about 0.35 (Chrysler Imperial), well below 1. The model assumptions look reasonable.
+
+## Uncertainty and Inference
+
+```{r infer}
+t.test(mpg ~ am, data = mtcars)
+```
+
+The unadjusted t-test shows a clear difference (about 7.2 MPG, p = 0.001), but that difference is mostly explained by weight. In the adjusted model, the `am` effect has p = 0.047 and a confidence interval that nearly reaches zero. So we can say manual is associated with higher MPG, but we cannot be confident about how much. With only 32 cars (13 manual) and observational data, this is not a causal result.
+
+## Conclusion
+
+1. **Is manual better for MPG?** Yes in this data, but only modestly once weight and qsec are accounted for.
+2. **How big is the difference?** About 2.9 MPG (95% CI 0.05 to 5.8), against 7.2 MPG without adjustment.
+
+**Limitations:** small sample, observational data, cars are not randomly assigned to a transmission type, and the significant weight-by-transmission interaction means the single "2.9 MPG" figure is an average; the manual advantage differs between light and heavy cars (see `summary(fit4)`).
+
+
+## Appendix: Figures
+
+```{r fig1, fig.height=3.5, fig.cap="Figure 1: MPG by transmission type"}
+boxplot(mpg ~ am, data = mtcars, col = c("tomato", "steelblue"),
+        xlab = "Transmission", ylab = "Miles per gallon")
+```
+
+```{r fig2, fig.height=4, fig.cap="Figure 2: Weight vs MPG, coloured by transmission"}
+plot(mtcars$wt, mtcars$mpg, pch = 19, col = ifelse(mtcars$am == "Manual", "steelblue", "tomato"),
+     xlab = "Weight (1000 lb)", ylab = "MPG")
+legend("topright", legend = c("Automatic", "Manual"), col = c("tomato", "steelblue"), pch = 19)
+```
+
+```{r fig3, fig.height=5, fig.cap="Figure 3: Pairs plot of key variables"}
+pairs(mtcars[, c("mpg", "wt", "qsec", "hp", "disp")], panel = panel.smooth)
+```
